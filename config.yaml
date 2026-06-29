@@ -1,0 +1,120 @@
+project:
+  name: "ICU LOS Prediction"
+  random_state: 42
+  log_level: "INFO"
+
+data:
+  source: "postgresql"  # Options: "postgresql", "csv"
+  table_sources:
+    chartevents: "csv"
+    labevents: "csv"
+  csv_chunksize: 1000000
+
+  postgresql:
+    host: "localhost"
+    port: 5432
+    dbname: "postgres"
+    user: "postgres"
+    password: ""  # Prefer environment variable MIMIC_PG_PASSWORD
+    schema_hosp: "mimiciv_hosp"
+    schema_icu: "mimiciv_icu"
+    schema_derived: "mimiciv_derived"
+
+  csv:
+    base_path: "data/raw/"
+    files:
+      icustays: "icu/icustays.csv"
+      admissions: "hosp/admissions.csv"
+      patients: "hosp/patients.csv"
+      diagnoses_icd: "hosp/diagnoses_icd.csv"
+      d_icd_diagnoses: "hosp/d_icd_diagnoses.csv"
+      chartevents: "icu/chartevents.csv"
+      labevents: "hosp/labevents.csv"
+
+cohort:
+  min_age: 18
+  min_los_hours: 4
+  max_los_days: 30
+  first_icu_stay_only: true
+
+los_bins:
+  short_threshold_days: 2
+  long_threshold_days: 7
+  class_labels:
+    0: "Short (<=2d)"
+    1: "Medium (2-7d)"
+    2: "Long (>7d)"
+
+preprocessing:
+  test_size: 0.20
+  val_size: 0.10
+  cv_folds: 5
+  imputation_strategy: "median"
+  scaling: "standard"
+
+models:
+  stage1:
+    logistic_regression:
+      C: [0.01, 0.1, 1.0, 10.0]
+      max_iter: 1000
+      solver: "lbfgs"
+      multi_class: "multinomial"
+    random_forest:
+      n_estimators: [100, 300]
+      max_depth: [5, 10, null]
+      min_samples_leaf: [1, 5]
+    xgboost:
+      n_estimators: [100, 300]
+      max_depth: [3, 6]
+      learning_rate: [0.05, 0.1]
+      subsample: [0.8, 1.0]
+    svm:
+      C: [0.1, 1.0, 10.0]
+      kernel: ["rbf"]
+      gamma: ["scale"]
+      max_train_samples: 5000
+    mlp:
+      hidden_layer_sizes: [[64, 32], [128, 64, 32]]
+      activation: ["relu"]
+      dropout: 0.3
+      epochs: 100
+      batch_size: 256
+      learning_rate: 0.001
+      early_stopping_patience: 10
+      max_train_samples: 10000
+
+  stage2:
+    linear_regression: {}
+    ridge:
+      alpha: [0.1, 1.0, 10.0, 100.0]
+    huber:
+      epsilon: [1.2, 1.35, 1.5]
+      alpha: [0.0001, 0.001, 0.01]
+    random_forest:
+      n_estimators: [100, 300]
+      max_depth: [5, 10, null]
+      min_samples_leaf: [1, 5]
+    xgboost:
+      n_estimators: [100, 300]
+      max_depth: [3, 6]
+      learning_rate: [0.05, 0.1]
+      subsample: [0.8, 1.0]
+    gradient_boosting:
+      n_estimators: [100, 300]
+      max_depth: [3, 5]
+      learning_rate: [0.05, 0.1]
+    mlp:
+      hidden_layer_sizes: [[64, 32], [128, 64, 32]]
+      activation: ["relu"]
+      dropout: 0.3
+      epochs: 100
+      batch_size: 256
+      learning_rate: 0.001
+      early_stopping_patience: 10
+      max_train_samples: 10000
+
+output:
+  results_dir: "results/"
+  dpi: 300
+  figure_format: "png"
+  figure_size: [10, 8]

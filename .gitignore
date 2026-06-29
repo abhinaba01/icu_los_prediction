@@ -1,0 +1,14 @@
+data/raw/*
+data/interim/*
+data/processed/*
+results/**/*.csv
+results/**/*.tex
+results/**/*.png
+results/**/*.pkl
+results/**/*.npz
+logs/*.log
+__pycache__/
+.pytest_cache/
+.ipynb_checkpoints/
+*.pyc
+!.gitkeep
