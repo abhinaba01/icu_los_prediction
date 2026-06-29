@@ -1,3 +1,6 @@
+import pandas as pd
+
+
 def build_sofa(cohort_df: pd.DataFrame,
                loader,
                sofa_precomputed_df: pd.DataFrame = None) -> pd.DataFrame:
@@ -29,6 +32,6 @@ def build_sofa(cohort_df: pd.DataFrame,
     if sofa_precomputed_df is not None:
         df = sofa_precomputed_df.copy()
     else:
-        df = loader.run_sql('sql/06_extract_sofa.sql')
+        df = loader.run_sql_extract('sofa')
 
     return df.set_index('stay_id')

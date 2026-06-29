@@ -15,7 +15,7 @@ from src.features.administrative import build_administrative
 from src.features.demographics import build_demographics
 from src.features.labs import build_labs
 from src.features.labs import LAB_ITEMIDS, LAB_OUTPUT_COLUMNS, LAB_RANGES
-from src.features.occupancy import build_occupancy
+from src.features.sofa import build_sofa
 from src.features.vitals import build_vitals
 from src.features.vitals import VITAL_ITEMIDS, VITAL_OUTPUT_COLUMNS, VITAL_RANGES
 
@@ -152,33 +152,25 @@ def build_labs_from_csv_chunks(loader: MIMICLoader, cohort_df: pd.DataFrame) -> 
     return _finalize_chunked_means(aggregates, LAB_OUTPUT_COLUMNS)
 
 
-# def build_extended_features(hempel_df: pd.DataFrame, cohort_df: pd.DataFrame, output_path: str | Path | None = None) -> pd.DataFrame:
-    """Add ICU bed occupancy features to the Hempel feature set.
+def build_extended_features(hempel_df: pd.DataFrame, cohort_df: pd.DataFrame, loader: MIMICLoader) -> pd.DataFrame:
+    """Add SOFA severity-score features to the Hempel feature set.
 
     Args:
         hempel_df: Hempel feature matrix containing `stay_id`.
-        cohort_df: Cohort DataFrame with admission and discharge timestamps.
-        output_path: Optional output parquet path.
+        cohort_df: Cohort DataFrame with admission/discharge timestamps.
+        loader: Configured MIMIC loader, used to run the SOFA SQL extraction.
 
     Returns:
-        Extended feature matrix.
+        Extended feature matrix (Hempel features + SOFA features).
 
     Raises:
-        KeyError: If `stay_id` is missing.
+        KeyError: If `stay_id` is missing from hempel_df.
     """
     if "stay_id" not in hempel_df.columns:
         raise KeyError("hempel_df must contain stay_id")
-    occupancy = build_occupancy(cohort_df)
-    extended = hempel_df.merge(occupancy.reset_index(), on="stay_id", how="left")
-    output = Path(output_path) if output_path is not None else Path("data/processed/extended_features.parquet")
-    _save_processed(extended, output)
-    return extended
-
-# AFTER:
-def build_extended_features(hempel_df, cohort_df, loader):
     sofa = build_sofa(cohort_df, loader)
-    extended = hempel_df.join(sofa, on='stay_id', how='left')
-    extended.to_parquet('data/processed/extended_features.parquet')
+    extended = hempel_df.join(sofa, on="stay_id", how="left")
+    _save_processed(extended, loader.project_root / "data" / "processed" / "extended_features.parquet")
     return extended
 
 

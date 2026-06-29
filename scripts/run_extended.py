@@ -91,7 +91,7 @@ def main() -> None:
     loader = MIMICLoader(config, PROJECT_ROOT)
     hempel_df = load_or_build_hempel(loader, config)
     cohort_df = load_cohort(loader, config)
-    extended_df = build_extended_features(hempel_df, cohort_df, PROJECT_ROOT / "data" / "processed" / "extended_features.parquet")
+    extended_df = build_extended_features(hempel_df, cohort_df, loader)
 
     results_dir = PROJECT_ROOT / "results" / "extended"
     tables_dir = results_dir / "tables"

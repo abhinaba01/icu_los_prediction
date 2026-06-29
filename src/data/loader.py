@@ -20,7 +20,7 @@ SQL_EXTRACT_MAP = {
     "diagnoses": "03_extract_diagnoses.sql",
     "vitals": "04_extract_vitals_24h.sql",
     "labs": "05_extract_labs_24h.sql",
-    "occupancy": "06_extract_icu_occupancy.sql",
+    "sofa": "06_extract_sofa.sql",
 }
 
 
@@ -156,7 +156,7 @@ class MIMICLoader:
 
         Args:
             extract_name: Logical extraction name such as `cohort`, `diagnoses`,
-                `vitals`, `labs`, or `occupancy`.
+                `vitals`, `labs`, or `sofa`.
 
         Returns:
             Extraction result as a DataFrame.
@@ -165,7 +165,7 @@ class MIMICLoader:
             KeyError: If the extraction name is unknown.
         """
         sql_file = SQL_EXTRACT_MAP[extract_name]
-        if extract_name in {"vitals", "labs", "occupancy"}:
+        if extract_name in {"vitals", "labs", "sofa"}:
             return self.run_sql_with_base_cohort(self.sql_dir / sql_file)
         return self.run_sql(self.sql_dir / sql_file)
 
