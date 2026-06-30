@@ -8,33 +8,81 @@ WITH cohort AS (
 ),
 
 -- ----------------------------------------------------------------
--- 1. RESPIRATORY: PaO2/FiO2 ratio (use SpO2/FiO2 if PaO2 absent)
+-- 1. RESPIRATORY: PaO2/FiO2 ratio (estimate from SpO2/FiO2 if PaO2 absent)
+--
+-- Bug fixes vs. original:
+--   * PaO2 (itemid 50821) is a LABEVENTS measurement, not chartevents.
+--     Reading it from chartevents always returned NULL. Now sourced from
+--     labevents (joined on hadm_id), aggregated separately to avoid any
+--     cartesian product with the chartevents-derived SpO2/FiO2.
+--   * SpO2 was previously scored with PaO2/FiO2 thresholds (invalid) and
+--     used MAX(spo2) (best, not worst). Now we take the worst (MIN) SpO2
+--     and convert SpO2/FiO2 -> estimated PaO2/FiO2 via the Rice et al.
+--     (2007) relationship  S/F = 64 + 0.84 * (P/F)  =>  P/F = (S/F - 64)/0.84,
+--     valid for SpO2 <= 97 percent, then apply the standard P/F thresholds once.
 -- ----------------------------------------------------------------
-bg AS (
+pao2_24h AS (
+    -- Worst (lowest) PaO2 in the first 24h, from blood-gas labs.
     SELECT c.stay_id,
-           MIN(CASE WHEN ce.itemid = 50821 THEN ce.valuenum END) AS pao2,
-           MAX(CASE WHEN ce.itemid = 223835 THEN ce.valuenum END) AS fio2_chart,
-           MAX(CASE WHEN ce.itemid = 220277 THEN ce.valuenum END) AS spo2
+           MIN(le.valuenum) AS pao2
+    FROM cohort c
+    JOIN mimiciv_hosp.labevents le
+      ON le.hadm_id = c.hadm_id
+     AND le.itemid = 50821
+     AND le.charttime BETWEEN c.intime AND c.intime + INTERVAL '24 hours'
+     AND le.valuenum IS NOT NULL
+    GROUP BY c.stay_id
+),
+spo2_fio2_24h AS (
+    -- Worst (lowest) SpO2 and highest FiO2 requirement in the first 24h.
+    SELECT c.stay_id,
+           MIN(CASE WHEN ce.itemid = 220277 AND ce.valuenum BETWEEN 50 AND 100
+                    THEN ce.valuenum END) AS spo2,
+           MAX(CASE WHEN ce.itemid = 223835 THEN ce.valuenum END) AS fio2_chart
     FROM cohort c
     JOIN mimiciv_icu.chartevents ce ON ce.stay_id = c.stay_id
-    WHERE ce.itemid IN (50821, 223835, 220277)
+    WHERE ce.itemid IN (220277, 223835)
       AND ce.charttime BETWEEN c.intime AND c.intime + INTERVAL '24 hours'
       AND ce.valuenum IS NOT NULL
     GROUP BY c.stay_id
 ),
+resp_ratio AS (
+    -- Normalise FiO2 to a fraction (chartevents records it as a percent,
+    -- occasionally already as a fraction), then derive a single P/F ratio:
+    -- prefer measured PaO2/FiO2; otherwise estimate from SpO2/FiO2.
+    SELECT stay_id,
+           CASE
+               WHEN fio2_frac IS NULL OR fio2_frac = 0 THEN NULL
+               WHEN pao2 IS NOT NULL THEN pao2 / fio2_frac
+               WHEN spo2 IS NOT NULL AND spo2 <= 97
+                   THEN ((spo2 / fio2_frac) - 64.0) / 0.84
+               ELSE NULL
+           END AS pf_ratio
+    FROM (
+        SELECT c.stay_id,
+               CASE
+                   WHEN sf.fio2_chart IS NULL THEN NULL
+                   WHEN sf.fio2_chart > 1.0 THEN sf.fio2_chart / 100.0
+                   ELSE sf.fio2_chart
+               END AS fio2_frac,
+               p.pao2,
+               sf.spo2
+        FROM cohort c
+        LEFT JOIN pao2_24h      p  ON p.stay_id  = c.stay_id
+        LEFT JOIN spo2_fio2_24h sf ON sf.stay_id = c.stay_id
+    ) resp_inputs
+),
 resp_sofa AS (
     SELECT stay_id,
-           COALESCE(pao2, spo2) AS o2_value,
-           fio2_chart,
            CASE
-               WHEN fio2_chart IS NULL OR fio2_chart = 0 THEN 0
-               WHEN (COALESCE(pao2, spo2) / (fio2_chart / 100.0)) < 100 THEN 4
-               WHEN (COALESCE(pao2, spo2) / (fio2_chart / 100.0)) < 200 THEN 3
-               WHEN (COALESCE(pao2, spo2) / (fio2_chart / 100.0)) < 300 THEN 2
-               WHEN (COALESCE(pao2, spo2) / (fio2_chart / 100.0)) < 400 THEN 1
+               WHEN pf_ratio IS NULL THEN 0   -- not assessable -> 0 per project convention
+               WHEN pf_ratio < 100 THEN 4
+               WHEN pf_ratio < 200 THEN 3
+               WHEN pf_ratio < 300 THEN 2
+               WHEN pf_ratio < 400 THEN 1
                ELSE 0
            END AS sofa_resp
-    FROM bg
+    FROM resp_ratio
 ),
 
 -- ----------------------------------------------------------------
@@ -138,33 +186,54 @@ coag_sofa AS (
 
 -- ----------------------------------------------------------------
 -- 5. RENAL: Creatinine (itemid 50912) + Urine Output
+--
+-- Bug fix vs. original: creatinine (labevents) and urine output
+-- (outputevents) were LEFT JOINed in a single CTE and then aggregated,
+-- producing a cartesian product. SUM(urine) was multiplied by the number
+-- of creatinine rows, badly inflating urine_24h and breaking the
+-- urine-based thresholds. Each source is now aggregated to one row per
+-- stay BEFORE being combined.
 -- ----------------------------------------------------------------
+creat_24h AS (
+    SELECT c.stay_id,
+           MAX(cr.valuenum) AS creatinine_max
+    FROM cohort c
+    JOIN mimiciv_hosp.labevents cr
+      ON cr.hadm_id = c.hadm_id
+     AND cr.itemid = 50912
+     AND cr.charttime BETWEEN c.intime AND c.intime + INTERVAL '24 hours'
+     AND cr.valuenum BETWEEN 0.1 AND 20
+    GROUP BY c.stay_id
+),
+urine_24h_cte AS (
+    SELECT c.stay_id,
+           SUM(oe.value) AS urine_24h
+    FROM cohort c
+    JOIN mimiciv_icu.outputevents oe
+      ON oe.stay_id = c.stay_id
+     AND oe.charttime BETWEEN c.intime AND c.intime + INTERVAL '24 hours'
+     AND oe.value IS NOT NULL
+     AND oe.itemid IN (226559, 226560, 226561, 226584,
+                       226563, 226564, 226565, 226567,
+                       226557, 226558, 227488, 227489)
+    GROUP BY c.stay_id
+),
 renal_sofa AS (
     SELECT c.stay_id,
-           MAX(cr.valuenum) AS creatinine_max,
-           SUM(oe.value)    AS urine_24h,
+           cr.creatinine_max,
+           ur.urine_24h,
            CASE
-               WHEN MAX(cr.valuenum) >= 5.0
-                 OR SUM(oe.value) < 200 THEN 4
-               WHEN MAX(cr.valuenum) >= 3.5
-                 OR SUM(oe.value) < 500 THEN 3
-               WHEN MAX(cr.valuenum) >= 2.0 THEN 2
-               WHEN MAX(cr.valuenum) >= 1.2 THEN 1
+               WHEN cr.creatinine_max >= 5.0
+                 OR ur.urine_24h < 200 THEN 4
+               WHEN cr.creatinine_max >= 3.5
+                 OR ur.urine_24h < 500 THEN 3
+               WHEN cr.creatinine_max >= 2.0 THEN 2
+               WHEN cr.creatinine_max >= 1.2 THEN 1
                ELSE 0
            END AS sofa_renal
     FROM cohort c
-    LEFT JOIN mimiciv_hosp.labevents cr
-           ON cr.hadm_id = c.hadm_id
-          AND cr.itemid = 50912
-          AND cr.charttime BETWEEN c.intime AND c.intime + INTERVAL '24 hours'
-          AND cr.valuenum BETWEEN 0.1 AND 20
-    LEFT JOIN mimiciv_icu.outputevents oe
-           ON oe.stay_id = c.stay_id
-          AND oe.charttime BETWEEN c.intime AND c.intime + INTERVAL '24 hours'
-          AND oe.itemid IN (226559, 226560, 226561, 226584,
-                            226563, 226564, 226565, 226567,
-                            226557, 226558, 227488, 227489)
-    GROUP BY c.stay_id
+    LEFT JOIN creat_24h     cr ON cr.stay_id = c.stay_id
+    LEFT JOIN urine_24h_cte ur ON ur.stay_id = c.stay_id
 ),
 
 -- ----------------------------------------------------------------

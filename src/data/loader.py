@@ -186,7 +186,12 @@ class MIMICLoader:
         with self.engine.begin() as connection:
             connection.execute(text("DROP TABLE IF EXISTS pg_temp.base_cohort"))
             connection.execute(text(f"CREATE TEMP TABLE base_cohort AS {base_query}"))
-            return pd.read_sql_query(target_query, connection)
+            # Wrap in text(): passing a raw string + live Connection makes pandas
+            # route through exec_driver_sql, which trips on SQLAlchemy 2.0's empty
+            # immutabledict ("immutabledict is not a sequence"). A TextClause sends
+            # it via connection.execute() instead. The temp table requires this same
+            # connection, so we cannot fall back to the engine here.
+            return pd.read_sql_query(text(target_query), connection)
 
     def _load_csv_table(self, table_name: str) -> pd.DataFrame:
         """Load a configured CSV table.

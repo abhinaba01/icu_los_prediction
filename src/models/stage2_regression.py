@@ -29,7 +29,7 @@ def get_stage2_models(random_state: int = 42) -> dict[str, object]:
     models: dict[str, object] = {
         "linear_regression": LinearRegression(),
         "ridge": Ridge(alpha=1.0, random_state=random_state),
-        "huber": HuberRegressor(epsilon=1.35, alpha=0.0001),
+        "huber": HuberRegressor(epsilon=1.35, alpha=0.0001, max_iter=2000),
         "random_forest": RandomForestRegressor(
             n_estimators=300,
             max_depth=10,
